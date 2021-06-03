@@ -1,5 +1,5 @@
-# anf-samples
-This collection of Amazon Route 53 Firewall templates, demonstrates automated approaches involving an Amazon Route 53 Firewall Domain List, paired with an AWS Lambda function to parse an external source, and keep the Rule Group automatically up to date.
+# Amazon Route 53 Resolver DNS Firewall Automation Examples
+This collection of Amazon Route 53 Firewall templates and scripts, demonstrates automated approaches involving an Amazon Route 53 Firewall Domain List, paired with an AWS Lambda function to parse an external source, and keep the Rule Group automatically up to date.
   
 ## File Structure
 This project consists of CloudFormation Templates and snippets of source code that demonstrate the functional areas of the approach.
