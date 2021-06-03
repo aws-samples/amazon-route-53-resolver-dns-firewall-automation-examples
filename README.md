@@ -1,17 +1,27 @@
-## My Project
+# anf-samples
+This collection of Amazon Route 53 Firewall templates, demonstrates automated approaches involving an Amazon Route 53 Firewall Domain List, paired with an AWS Lambda function to parse an external source, and keep the Rule Group automatically up to date.
+  
+## File Structure
+This project consists of CloudFormation Templates and snippets of source code that demonstrate the functional areas of the approach.
 
-TODO: Fill this README out!
+## Examples
 
-Be sure to:
+#### Abuse.CH
+* Examples of using URLs hosting IP addresses or hostnames from https://abuse.ch
 
-* Change the title in this README
-* Edit your repository description on GitHub
+## Architecture Diagram
+* Open - R53DomainListSamplesOverview.png
 
-## Security
+## Getting Started
 
-See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+#### 01. Clone the repository
+* Clone the repository:
 
-## License
+#### 02. Deploy the AWS Network Firewall Rule Group Automations solution:
+* Using AWS CloudFormation, create a Stack from the templates available in the deploment folders from where you cloned the deployment assets.
 
-This library is licensed under the MIT-0 License. See the LICENSE file.
+***
 
+## License Summary
+
+This sample code is made available under the MIT-0 license. See the LICENSE file.
