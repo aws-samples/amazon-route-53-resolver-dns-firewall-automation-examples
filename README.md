@@ -10,7 +10,7 @@ This project consists of CloudFormation Templates and snippets of source code th
 * Examples of using URLs hosting IP addresses or hostnames from https://abuse.ch
 
 ## Architecture Diagram
-* Open - R53DomainListSamplesOverview.png
+<img src=/R53DomainListSamplesOverview.png>
 
 ## Getting Started
 
