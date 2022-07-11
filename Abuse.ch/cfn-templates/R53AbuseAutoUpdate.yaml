@@ -128,17 +128,17 @@ Resources:
           Value: "R53-Abuse-AutoUpate"
       Code:
         ZipFile: !Sub |
-          var AWS = require("aws-sdk");
-          var response = require("cfn-response");
-          var https = require("https");
+          const AWS = require("aws-sdk");
+          const response = require("cfn-response");
+          const https = require("https");
 
           const s3 = new AWS.S3();
           const route53resolver = new AWS.Route53Resolver();
 
-          var hostfileUrl = "https://urlhaus.abuse.ch/downloads/hostfile/";
+          const hostfileUrl = "https://urlhaus.abuse.ch/downloads/hostfile/";
 
           async function importList (s3Obj){
-              var params = {
+              let params = {
                 DomainFileUrl: s3Obj,
                 FirewallDomainListId: "${AbuseDL}",
                 Operation: "REPLACE"
@@ -152,7 +152,7 @@ Resources:
           }
 
           async function writeToS3(domains){
-            var params = {
+            let params = {
               Bucket: "${S3Bucket}",
               Key: "autoupdating-dnsfirewall-domains.txt",
               Body: domains.join('\n'),
@@ -167,7 +167,7 @@ Resources:
           }
 
           async function deleteFromS3(){
-            var params = {
+            let params = {
               Bucket: "${S3Bucket}",
               Key: "autoupdating-dnsfirewall-domains.txt"
             };
@@ -180,7 +180,7 @@ Resources:
           }
 
           async function getDomains (){
-            var listOfDomains = [];
+            let listOfDomains = [];
               console.log("Fetching the list of domains from " + hostfileUrl);
               return new Promise((resolve, reject) => {
                 const url = hostfileUrl;
