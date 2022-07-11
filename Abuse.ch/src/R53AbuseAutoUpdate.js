@@ -10,7 +10,7 @@ const hostfileUrl = "https://urlhaus.abuse.ch/downloads/hostfile/";
 async function importList (s3Obj){
     let params = {
       DomainFileUrl: s3Obj,
-      FirewallDomainListId: "<REPLACE-WITH-YOUR-ID>",
+      FirewallDomainListId: "<REPLACE-WITH-YOUR-DOMAIN-LIST-ID>",
       Operation: "REPLACE"
     };
     
@@ -23,7 +23,7 @@ async function importList (s3Obj){
 
 async function writeToS3(domains){
   let params = {
-    Bucket: "test-r53-s3bucket-a8gzekj1lmn2",
+    Bucket: "<REPLACE-WITH-YOUR-BUCKET-NAME>",
     Key: "autoupdating-dnsfirewall-domains.txt",
     Body: domains.join('\n'),
     ContentType: "text/plain"
@@ -38,7 +38,7 @@ async function writeToS3(domains){
 
 async function deleteFromS3(){
   let params = {
-    Bucket: "test-r53-s3bucket-a8gzekj1lmn2",
+    Bucket: "<REPLACE-WITH-YOUR-BUCKET-NAME>",
     Key: "autoupdating-dnsfirewall-domains.txt"
   };
   let res = await s3.deleteObject(params, function(err, data){
