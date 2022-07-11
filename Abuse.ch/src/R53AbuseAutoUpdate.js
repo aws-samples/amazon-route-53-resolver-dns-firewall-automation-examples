@@ -1,15 +1,16 @@
-var AWS = require("aws-sdk");
-var https = require("https");
+const AWS = require("aws-sdk");
+const response = require("cfn-response");
+const https = require("https");
 
 const s3 = new AWS.S3();
 const route53resolver = new AWS.Route53Resolver();
 
-var hostfileUrl = "https://urlhaus.abuse.ch/downloads/hostfile/";
+const hostfileUrl = "https://urlhaus.abuse.ch/downloads/hostfile/";
 
 async function importList (s3Obj){
-    var params = {
+    let params = {
       DomainFileUrl: s3Obj,
-      FirewallDomainListId: "rslvr-fdl-546e4a1e7034fdd",
+      FirewallDomainListId: "<REPLACE-WITH-YOUR-ID>",
       Operation: "REPLACE"
     };
     
@@ -21,8 +22,8 @@ async function importList (s3Obj){
 }
 
 async function writeToS3(domains){
-  var params = {
-    Bucket: "r53-t1-s3bucket-1kxu9zmfu28em",
+  let params = {
+    Bucket: "test-r53-s3bucket-a8gzekj1lmn2",
     Key: "autoupdating-dnsfirewall-domains.txt",
     Body: domains.join('\n'),
     ContentType: "text/plain"
@@ -36,8 +37,8 @@ async function writeToS3(domains){
 }
 
 async function deleteFromS3(){
-  var params = {
-    Bucket: "r53-t1-s3bucket-1kxu9zmfu28em",
+  let params = {
+    Bucket: "test-r53-s3bucket-a8gzekj1lmn2",
     Key: "autoupdating-dnsfirewall-domains.txt"
   };
   let res = await s3.deleteObject(params, function(err, data){
@@ -49,7 +50,7 @@ async function deleteFromS3(){
 }
 
 async function getDomains (){
-  var listOfDomains = [];
+  let listOfDomains = [];
     console.log("Fetching the list of domains from " + hostfileUrl);
     return new Promise((resolve, reject) => {
       const url = hostfileUrl;
@@ -79,6 +80,11 @@ async function getDomains (){
 }
 
 exports.handler = async (event, context) => {
+  if (event.RequestType == "Delete") {
+    await deleteFromS3();
+    await response.send(event, context, "SUCCESS");
+    return;
+  }
 
   let domains = await getDomains();
   if (domains.length) {
@@ -86,15 +92,19 @@ exports.handler = async (event, context) => {
     if (s3Obj) {
       let res = await importList(s3Obj);
       if (res) {
+        if (event.ResponseURL) await response.send(event, context, response.SUCCESS);
         console.log("Done");
       } else {
         console.log("ERROR - Import failed");
+        if (event.ResponseURL) await response.send(event, context, response.FAILED);
       }                
     } else {
       console.log("ERROR - Unable to write domain file to S3");
+      if (event.ResponseURL) await response.send(event, context, response.FAILED);
     }
   } else {
     console.log("ERROR - Unable to fetch domain list");
+    if (event.ResponseURL) await response.send(event, context, response.FAILED);
   }
   
   return;
