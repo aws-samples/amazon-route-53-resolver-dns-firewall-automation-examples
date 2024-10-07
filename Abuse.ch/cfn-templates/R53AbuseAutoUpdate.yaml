@@ -118,8 +118,8 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: nodejs16.x
-      Handler: index.handler
+      Runtime: python3.12
+      Handler: index.lambda_handler
       Timeout: 60
       Description: Used to fetch data from the abuse.ch rule list and update the associated Domain List
       Tags: 
@@ -128,114 +128,111 @@ Resources:
           Value: "R53-Abuse-AutoUpate"
       Code:
         ZipFile: !Sub |
-          const AWS = require("aws-sdk");
-          const response = require("cfn-response");
-          const https = require("https");
+          import boto3
+          import json
+          import urllib.request
+          import re
+          from botocore.exceptions import ClientError
+          import cfnresponse
 
-          const s3 = new AWS.S3();
-          const route53resolver = new AWS.Route53Resolver();
+          s3 = boto3.client('s3')
+          route53resolver = boto3.client('route53resolver')
 
-          const hostfileUrl = "https://urlhaus.abuse.ch/downloads/hostfile/";
+          HOSTFILE_URL = "https://urlhaus.abuse.ch/downloads/hostfile/"
+          BUCKET_NAME = "${S3Bucket}"
+          DOMAIN_LIST_ID = "${AbuseDL}"
+          FILE_KEY = "autoupdating-dnsfirewall-domains.txt"
 
-          async function importList (s3Obj){
-              let params = {
-                DomainFileUrl: s3Obj,
-                FirewallDomainListId: "${AbuseDL}",
-                Operation: "REPLACE"
-              };
+          # Compile the pattern once
+          DOMAIN_PATTERN = re.compile(r'^(?!:\/\/)(?=.{1,255}$)((.{1,63}\.){1,127}(?![0-9]*$)[a-z0-9-]+\.?)$')
+
+          def import_list(s3_obj):
+              try:
+                  res = route53resolver.import_firewall_domains(
+                      DomainFileUrl=s3_obj,
+                      FirewallDomainListId=DOMAIN_LIST_ID,
+                      Operation="REPLACE"
+                  )
+                  print(f"Updating the domain list using {s3_obj}")
+                  return res
+              except ClientError as e:
+                  print(f"Error importing firewall domains: {e}")
+                  return None
+
+          def write_to_s3(domains):
+              try:
+                  s3.put_object(
+                      Bucket=BUCKET_NAME,
+                      Key=FILE_KEY,
+                      Body='\n'.join(domains),
+                      ContentType="text/plain"
+                  )
+                  return f"s3://{BUCKET_NAME}/{FILE_KEY}"
+              except ClientError as e:
+                  print(f"Error writing to S3: {e}")
+                  return None
+
+          def delete_from_s3():
+              try:
+                  s3.delete_object(Bucket=BUCKET_NAME, Key=FILE_KEY)
+                  print("Deleted the import file")
+              except ClientError as e:
+                  print(f"Error deleting from S3: {e}")
+
+          def get_domains():
+              print(f"Fetching the list of domains from {HOSTFILE_URL}")
+              try:
+                  with urllib.request.urlopen(HOSTFILE_URL) as response:
+                      data = response.read().decode('utf-8')
+                  
+                  # Use a set for faster membership testing and uniqueness
+                  filtered_domains = set()
+                  
+                  for line in data.splitlines():
+                      if line.startswith('#') or not line.strip():
+                          continue
+                      parts = line.split('\t')
+                      if len(parts) >= 2:
+                          domain = parts[1].strip()
+                          if DOMAIN_PATTERN.match(domain):
+                              filtered_domains.add(domain)
+                              # print(f"Added domain: {domain}")  # Print each added domain
+                  
+                  print(f"Fetched {len(filtered_domains)} Domains")
+                  return list(filtered_domains)  # Convert back to list for consistency
+              except urllib.error.URLError as e:
+                  print(f"Error fetching domains: {e}")
+                  return []
               
-              let res = await route53resolver.importFirewallDomains(params, function(err, data) {
-                if (err) console.log(err, err.stack); // an error occurred
-                else     console.log("Updating the domain list using " + s3Obj);
-              }).promise();
-              return res;
-          }
+          def lambda_handler(event, context):
+              try:
+                  if event.get('RequestType') == "Delete":
+                      delete_from_s3()
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return {'statusCode': 200, 'body': json.dumps('SUCCESS')}
 
-          async function writeToS3(domains){
-            let params = {
-              Bucket: "${S3Bucket}",
-              Key: "autoupdating-dnsfirewall-domains.txt",
-              Body: domains.join('\n'),
-              ContentType: "text/plain"
-            };
-            let res = await s3.putObject(params, function(err, data){
-                              if (err) console.log(err, err.stack); // an error occurred
-                            }).promise();
-            if (res) {
-              return "https://" + params.Bucket + ".s3.amazonaws.com/" + params.Key;
-            }
-          }
+                  domains = get_domains()
+                  if not domains:
+                      print("ERROR - Unable to fetch domain list")
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {}, reason="Unable to fetch domain list")
+                      return {'statusCode': 500, 'body': json.dumps('FAILED - Unable to fetch domain list')}
 
-          async function deleteFromS3(){
-            let params = {
-              Bucket: "${S3Bucket}",
-              Key: "autoupdating-dnsfirewall-domains.txt"
-            };
-            let res = await s3.deleteObject(params, function(err, data){
-                              if (err) console.log(err, err.stack); // an error occurred
-                            }).promise();
-            if (res) {
-              console.log("Deleted the import file");
-            }
-          }
+                  s3_obj = write_to_s3(domains)
+                  if not s3_obj:
+                      print("ERROR - Unable to write domain file to S3")
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {}, reason="Unable to write domain file to S3")
+                      return {'statusCode': 500, 'body': json.dumps('FAILED - Unable to write domain file to S3')}
 
-          async function getDomains (){
-            let listOfDomains = [];
-              console.log("Fetching the list of domains from " + hostfileUrl);
-              return new Promise((resolve, reject) => {
-                const url = hostfileUrl;
-                let dataString = '';
-                let post_req = https.request(url, (res) => {
-                  res.setEncoding("utf8");
-                  res.on('data', chunk => {
-                    dataString += chunk;
-                  });
-                  res.on('end', () => {
-                    //console.log(dataString);
-                    listOfDomains = dataString
-                      .split(/\r?\n/)
-                      .filter((line) => line.match(/^\d+/))
-                      .map((line)=> {return line.replace(/127.0.0.1\t/,'')})
-                      .filter((line) => line.match(/^(?!:\/\/)(?=.{1,255}$)((.{1,63}\.){1,127}(?![0-9]*$)[a-z0-9-]+\.?)$/));
-                    console.log("Fetched " + listOfDomains.length + " Domains");
-                    resolve(listOfDomains);
-                  });
-                  res.on('error', (err) => {
-                    reject(err);
-                  });
-                });
-                post_req.write("test");
-                post_req.end();
-              });
-          }
-
-          exports.handler = async (event, context) => {
-            if (event.RequestType == "Delete") {
-              await deleteFromS3();
-              await response.send(event, context, "SUCCESS");
-              return;
-            }
-
-            let domains = await getDomains();
-            if (domains.length) {
-              let s3Obj = await writeToS3(domains, event.key);
-              if (s3Obj) {
-                let res = await importList(s3Obj);
-                if (res) {
-                  if (event.ResponseURL) await response.send(event, context, response.SUCCESS);
-                  console.log("Done");
-                } else {
-                  console.log("ERROR - Import failed");
-                  if (event.ResponseURL) await response.send(event, context, response.FAILED);
-                }                
-              } else {
-                console.log("ERROR - Unable to write domain file to S3");
-                if (event.ResponseURL) await response.send(event, context, response.FAILED);
-              }
-            } else {
-              console.log("ERROR - Unable to fetch domain list");
-              if (event.ResponseURL) await response.send(event, context, response.FAILED);
-            }
-            
-            return;
-          };
+                  res = import_list(s3_obj)
+                  if res:
+                      print("Done")
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return {'statusCode': 200, 'body': json.dumps('SUCCESS')}
+                  else:
+                      print("ERROR - Import failed")
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {}, reason="Import failed")
+                      return {'statusCode': 500, 'body': json.dumps('FAILED - Import failed')}
+              except Exception as e:
+                  print(f"ERROR: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {}, reason=str(e))
+                  return {'statusCode': 500, 'body': json.dumps(str(e))}
