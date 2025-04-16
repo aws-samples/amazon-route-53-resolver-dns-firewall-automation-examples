@@ -1,0 +1,87 @@
+# This templates creates a model Amazon Route 53 Resolver DNS Firewall Advanced ruleset
+
+AWSTemplateFormatVersion: "2010-09-09"
+
+Resources:
+  DNSFirewallAdvancedRuleGroup:
+    Type: AWS::Route53Resolver::FirewallRuleGroup
+    Properties:
+      Name: DNS-Firewall-Recommended-Rule-Group
+      FirewallRules:
+        - Action: BLOCK
+          BlockOverrideDnsType: CNAME
+          BlockOverrideDomain: dns-firewall-block
+          BlockOverrideTtl: 0
+          BlockResponse: OVERRIDE
+          # AWSManagedDomainsAggregateThreatList - Domains associated with multiple DNS threat categories including malware, ransomware, botnet, spyware, and DNS tunneling to help block multiple types of threats.
+          FirewallDomainListId: !FindInMap [RegionMap, !Ref "AWS::Region", DNSFirewallAggregateThreatsDomainListID] 
+          Priority: 1
+        - Action: BLOCK
+          BlockOverrideDnsType: CNAME
+          BlockOverrideDomain: dns-firewall-block
+          BlockOverrideTtl: 0
+          BlockResponse: OVERRIDE
+          ConfidenceThreshold: HIGH
+          DnsThreatProtection: DNS_TUNNELING
+          Priority: 2
+        - Action: BLOCK
+          BlockOverrideDnsType: CNAME
+          BlockOverrideDomain: dns-firewall-block
+          BlockOverrideTtl: 0
+          BlockResponse: OVERRIDE
+          ConfidenceThreshold: HIGH
+          DnsThreatProtection: DGA
+          Priority: 3
+        - Action: ALERT
+          ConfidenceThreshold: LOW
+          DnsThreatProtection: DNS_TUNNELING
+          Priority: 4
+        - Action: ALERT
+          ConfidenceThreshold: LOW
+          DnsThreatProtection: DGA
+          Priority: 5
+  
+
+
+### DNS Firewall Aggregate Threat List Domain List ID Mapping (ID varies by region) ###
+
+# If you need to deploy to the following regions, you'll need to add the domain-list-id manually:
+# (Africa (Cape Town), Asia Pacific (Hong Kong), Asia Pacific (Hyderabad), Asia Pacific (Jakarta), Europe (Zurich),
+# Asia Pacific (Melbourne), Asia Pacific (Malaysia), Asia Pacific (Thailand), Canada (Calgary), Europe (Milan)
+# Europe (Spain), Israel (Tel Aviv), Middle East (UAE), Middle East (Bahrain), Mexico (Central))
+Mappings: 
+  RegionMap: 
+    us-east-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-15f4860b1ad54ead
+    us-east-2: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-bbc798062d594728
+    us-west-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-d2a6edeaa3b04a8a
+    us-west-2: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-d252ee1944404e15
+    ap-south-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-d1159fcdd6b942cf
+    ap-southeast-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-49099fd7fc3d4853
+    ap-southeast-2: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-9be336ef32844e5
+    ap-northeast-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-103b4302c274455e
+    ap-northeast-2: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-1997a3cdd61a4f2a
+    ap-northeast-3: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-2e57899062984ed1
+    ca-central-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-46d873be30464a06
+    eu-central-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-54a2c1ef5b014042
+    eu-west-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-a88f2f26cc6a4296
+    eu-west-2: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-4e96d4ce77f466b
+    eu-west-3: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-6002172db5fc4cab
+    eu-north-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-17764a248c141e9
+    sa-east-1: 
+      DNSFirewallAggregateThreatsDomainListID: rslvr-fdl-5d3faeb3ed7a4492
