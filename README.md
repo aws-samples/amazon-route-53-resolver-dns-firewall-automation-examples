@@ -18,7 +18,6 @@ A CloudFormation template that creates a DNS Firewall rule group with recommende
 
 This solution demonstrates an automated approach for creating a DNS Firewall domain list, leveraging an AWS Lambda function to parse an external source (https://abuse.ch), and keep the rule group automatically up to date.
 
-## Architecture Diagram
 <img src=/R53DomainListSamplesOverview.png>
 
 ## Getting Started
