@@ -13,7 +13,22 @@ DOMAIN_LIST_ID = "<REPLACE-WITH-YOUR-DOMAIN-LIST-ID>"
 FILE_KEY = "autoupdating-dnsfirewall-domains.txt"
 
 # Compile the pattern once
-DOMAIN_PATTERN = re.compile(r'^(?!:\/\/)(?=.{1,255}$)((.{1,63}\.){1,127}(?![0-9]*$)[a-z0-9-]+\.?)$')
+DOMAIN_PATTERN = re.compile(
+    r'^'                           # Start of string
+    r'(?!-)'                       # Cannot start with hyphen
+    r'(?!.*--)'                    # No consecutive hyphens
+    r'(?=.{1,253}$)'              # Total length 1-253 (RFC compliant)
+    r'(?:'                         # Non-capturing group for labels
+        r'[a-zA-Z0-9]'             # Label must start with alphanumeric
+        r'(?:[a-zA-Z0-9-]{0,61}'   # Middle can have hyphens (max 63 total)
+        r'[a-zA-Z0-9])?'           # Must end with alphanumeric if >1 char
+        r'\.'                      # Followed by dot
+    r')+'                          # One or more labels
+    r'[a-zA-Z]'                    # TLD starts with letter
+    r'(?:[a-zA-Z0-9-]{0,61}'       # TLD middle part
+    r'[a-zA-Z0-9])?'               # TLD ends with alphanumeric if >1 char
+    r'$'                           # End of string
+)
 
 def import_list(s3_obj):
     try:
@@ -48,27 +63,26 @@ def delete_from_s3():
     except ClientError as e:
         print(f"Error deleting from S3: {e}")
 
+def parse_hostfile(content):
+    valid_domains = {
+        parts[1].strip()                                    # Extract and clean the domain name
+        for line in content.splitlines()                    # Split content into lines
+        if not line.startswith('#') and line.strip()        # Skip comments and empty lines
+        if (parts := line.split('\t')) and len(parts) >= 2  # Split by tab and ensure we have at least 2 parts
+        if DOMAIN_PATTERN.match(parts[1].strip())           # Validate domain with regex pattern
+    }
+    
+    return valid_domains
+
 def get_domains():
     print(f"Fetching the list of domains from {HOSTFILE_URL}")
     try:
         with urllib.request.urlopen(HOSTFILE_URL) as response:
-            data = response.read().decode('utf-8')
+            hostfile_content = response.read().decode('utf-8')
         
-        # Use a set for faster membership testing and uniqueness
-        filtered_domains = set()
-        
-        for line in data.splitlines():
-            if line.startswith('#') or not line.strip():
-                continue
-            parts = line.split('\t')
-            if len(parts) >= 2:
-                domain = parts[1].strip()
-                if DOMAIN_PATTERN.match(domain):
-                    filtered_domains.add(domain)
-                    # print(f"Added domain: {domain}")  # Print each added domain
-        
-        print(f"Fetched {len(filtered_domains)} Domains")
-        return list(filtered_domains)  # Convert back to list for consistency
+        valid_domains = parse_hostfile(hostfile_content)
+        print(f"Fetched {len(valid_domains)} domains")
+        return list(valid_domains)  # Convert back to list for consistency
     except urllib.error.URLError as e:
         print(f"Error fetching domains: {e}")
         return []
