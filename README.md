@@ -3,6 +3,14 @@ This repository contains CloudFormation templates and automation scripts for Ama
 
 ## Examples
 
+#### Abuse.CH
+* Located in `/Abuse.ch`
+
+This solution demonstrates an automated approach for creating a DNS Firewall domain list, leveraging an AWS Lambda function to parse an external source (https://abuse.ch), and keep the rule group automatically up to date.
+
+<img src=/R53DomainListSamplesOverview.png>
+
+
 #### DNS Firewall Advanced Sample Rule Group
 * Located in `/sample-rule-group`
 
@@ -13,12 +21,13 @@ A CloudFormation template that creates a DNS Firewall rule group with recommende
 * ALERT - DNS Tunneling (Low Confidence)
 * ALERT - Domain Generation Algorithms (Low Confidence)
 
-#### Abuse.CH
-* Located in `/Abuse.ch`
 
-This solution demonstrates an automated approach for creating a DNS Firewall domain list, leveraging an AWS Lambda function to parse an external source (https://abuse.ch), and keep the rule group automatically up to date.
+#### Allow List Generator
+* Located in `/AllowListGenerator`
 
-<img src=/R53DomainListSamplesOverview.png>
+This solution automates the creation of allow lists for Amazon Route 53 Resolver DNS Firewall based on Route 53 query logs. It analyzes DNS queries stored in CloudWatch Logs and generates domain lists with metrics, helping build allow list-based architectures for controlling outbound DNS traffic from your workloads.
+
+
 
 ## Getting Started
 1. Clone the repository

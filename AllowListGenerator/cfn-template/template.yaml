@@ -1,0 +1,410 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  # Name of CloudWatch Logs log group containing Route 53 query logs
+  DNSFirewallLogGroupName:
+    Type: String
+    Description: Name of CloudWatch Logs log group containing Route 53 query logs
+  # Name of the Route 53 Resolver DNS Firewall domain lists that we generate
+  StrictDNSAllowListName:
+    Type: String
+    Default: DNS-Firewall-Strict-Allow-List
+    Description: Name of the Route 53 Resolver DNS Firewall domain list which contains all domains reached from your workloads.
+  WildcardDNSAllowListName:
+    Type: String
+    Default: DNS-Firewall-Wildcard-Allow-List
+    Description: Name of the Route 53 Resolver DNS Firewall domain list which contains only wildcard domains. 
+  WildcardDomainMinimum:
+    Type: Number
+    Default: 15
+    Description: Minimum number of subdomains reached before a wildcard rule is added to allow all subdomains for the corresponding domain.
+
+Resources:
+
+  # Empty domain list, domains will be added by Lambda function
+  R53ResolverDomainAllowList:
+    Type: AWS::Route53Resolver::FirewallDomainList
+    Properties:
+      Name: !Ref StrictDNSAllowListName
+
+  # Domain list for wildcard domains
+  R53ResolverDomainWildcardAllowList:
+    Type: AWS::Route53Resolver::FirewallDomainList
+    Properties:
+      Name: !Ref WildcardDNSAllowListName
+
+  # DynamoDB table to store analyzed Route 53 query log data (fqdn, source_ip(s) making request to fqdn, and total number of requests to fqdn)
+  DNSFlowStatsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: Hostname
+          AttributeType: S
+      KeySchema:
+        - AttributeName: Hostname
+          KeyType: HASH
+
+  # CloudWatch logs subscription filter to invoke DNSAllowListUpdater Lambda function
+  # Only invokes Lambda if it's a request to a non-amazon/aws domain
+  LambdaSubscriptionFilter:
+    Type: AWS::Logs::SubscriptionFilter
+    DependsOn: SubscriptionFilterPermission
+    Properties:
+      DestinationArn: !GetAtt DNSAllowListUpdaterFunction.Arn
+      FilterName: !Ref DNSAllowListUpdaterFunction
+      FilterPattern: '{   $.rcode = "NOERROR"   }'
+      LogGroupName: !Ref DNSFirewallLogGroupName
+
+  # Lambda permission to allow CloudWatch logs to invoke the Lambda function
+  SubscriptionFilterPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt DNSAllowListUpdaterFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: logs.amazonaws.com
+
+  # Lambda function that updates the DynamoDB table / DNS Firewall Allow List
+  DNSAllowListUpdaterFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - DNSAllowListUpdaterFunctionPolicy
+      - DNSFlowStatsTable
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          import base64
+          import gzip
+          import datetime
+          from collections import defaultdict
+
+          # Initialize AWS clients
+          dynamodb = boto3.client('dynamodb')
+          route53resolver = boto3.client('route53resolver')
+
+          # DynamoDB table name
+          TABLE_NAME = os.getenv('DDB_TABLE_NAME')
+
+          # Route 53 Resolver DNS Firewall domain list IDs
+          DOMAIN_LIST_ID = os.getenv('DNS_ALLOW_LIST_ID') # Contains all domains reached
+          WILDCARD_DOMAIN_LIST_ID = os.getenv('WILDCARD_DNS_ALLOW_LIST_ID') # Contains wildcard domains
+
+          # Minimum number of subdomains to create a wildcard rule
+          # For example, if this number is set to 5, once 5 different subdomains for the same domain are reached,
+          # the entire domain will be added to the wildcard domain list
+          WILDCARD_DOMAIN_MINIMUM = int(os.getenv('WILDCARD_DOMAIN_MINIMUM'))
+
+
+          def add_domain_to_allow_list(domain, list_id):
+              try:
+                  # Check if the domain already exists in the domain list
+                  response = route53resolver.list_firewall_domains(
+                      FirewallDomainListId=list_id,
+                      MaxResults=100
+                  )
+
+                  domains = response['Domains']
+                  while 'NextToken' in response:
+                      response = route53resolver.list_firewall_domains(
+                          FirewallDomainListId=list_id,
+                          MaxResults=100,
+                          NextToken=response['NextToken']
+                      )
+                      domains.extend(response['Domains'])
+
+                  # print(f"Domains in the {list_id} list: {domains}")
+
+                  if domain not in domains:
+                      # Add the domain to the specified domain list
+                      route53resolver.update_firewall_domains(
+                          FirewallDomainListId=list_id,
+                          Operation='ADD',
+                          Domains=[domain]
+                      )
+                      print(f"{domain} added to the domain list - {list_id}")
+                  else:
+                      print(f"{domain} already exists in the domain list - {list_id}")
+
+              except Exception as e:
+                  if "ValidationException" in str(e) and "duplicated domains" in str(e):
+                      print(f"{domain} already exists in the domain list - {list_id}")
+                  else:
+                      print(f"Error adding domain to the domain list: {e}")
+
+          def handler(event, context):
+              # Process the log
+              domain_counts = process_log(event)
+
+              # Update the wildcard domain list
+              update_wildcard_domain_list(domain_counts)
+
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('DNS query log processed successfully')
+              }
+
+          def process_log(event):
+              print("Decoding event data...")
+              data = event['awslogs']['data']
+              decoded_event = json.loads(gzip.decompress(base64.b64decode(data)))
+              domain_counts = defaultdict(int)
+
+              for log_event in decoded_event['logEvents']:
+                  log_data = json.loads(log_event['message'])
+
+                  # Extract relevant data from the log
+                  query_name = log_data['query_name'].rstrip('.')
+                  srcaddr = log_data['srcaddr']
+                  srcids = log_data.get('srcids', {}).get('instance', '')
+
+                  print(f"Processing domain: {query_name}")
+                  full_domain, _, _ = extract_full_domain_and_subdomain(query_name)
+
+                  domain_counts[full_domain] += 1
+
+                  # Update the DynamoDB table
+                  update_dynamodb_table(full_domain, srcaddr, srcids, log_data)
+
+                  # Add the full domain to the non-wildcard domain list
+                  add_domain_to_allow_list(full_domain, DOMAIN_LIST_ID)
+
+              return domain_counts
+
+          def extract_full_domain_and_subdomain(query_name):
+              parts = query_name.split('.')
+
+              # Account for entries beginning with www
+              if parts[0] == 'www':
+                  parts = parts[1:]
+
+              # Split domain into full domain, root domain, and subdomain
+              full_domain = '.'.join(parts)
+              root_domain = '.'.join(parts[-2:])
+              subdomain = '.'.join(parts[:-2]) if len(parts) > 2 else ''
+
+              if subdomain:
+                  print(f"Full domain: {full_domain}, Subdomain: {subdomain}, Root domain: {root_domain}")
+              else:
+                  # If there is no subdomain:
+                  print(f"Full domain: {full_domain}, Root domain: {root_domain}")
+
+              return full_domain, subdomain, root_domain
+              
+
+          def update_dynamodb_table(full_domain, srcaddr, srcids, log_data):
+              try:
+                  # Get the current item from DynamoDB or create a new one
+                  response = dynamodb.get_item(
+                      TableName=TABLE_NAME,
+                      Key={'Hostname': {'S': full_domain}}
+                  )
+
+                  timestamp_str = log_data['query_timestamp']
+                  timestamp = int(datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%SZ").timestamp())
+
+                  if 'Item' in response:
+                      # Update the existing item
+                      item = response['Item']
+                      requests = int(item['Requests to Domain']['N']) + 1
+                      source_ips = set(item.get('Source IPs', {}).get('SS', []))
+                      source_ips.add(srcaddr)
+                      workloads = len(source_ips)
+
+                      instance_ids = set(item.get('Instance-IDs', {}).get('SS', []))
+                      if srcids:
+                          instance_ids.add(srcids)
+
+                      update_expression = 'SET #requests = :requests, #source_ips = :source_ips, #workloads = :workloads, #last_updated = :timestamp'
+                      expression_values = {
+                          ':requests': {'N': str(requests)},
+                          ':source_ips': {'SS': list(source_ips)},
+                          ':workloads': {'N': str(workloads)},
+                          ':timestamp': {'N': str(timestamp)}
+                      }
+                      expression_names = {
+                          '#requests': 'Requests to Domain',
+                          '#source_ips': 'Source IPs',
+                          '#workloads': 'Workloads Requesting Domain',
+                          '#last_updated': 'Last Updated Timestamp'
+                      }
+
+                      if instance_ids:
+                          update_expression += ', #instance_ids = :instance_ids'
+                          expression_values[':instance_ids'] = {'SS': list(instance_ids)}
+                          expression_names['#instance_ids'] = 'Instance-IDs'
+
+                      dynamodb.update_item(
+                          TableName=TABLE_NAME,
+                          Key={'Hostname': {'S': full_domain}},
+                          UpdateExpression=update_expression,
+                          ExpressionAttributeValues=expression_values,
+                          ExpressionAttributeNames=expression_names
+                      )
+                  else:
+                      # Create a new item
+                      item = {
+                          'Hostname': {'S': full_domain},
+                          'Requests to Domain': {'N': '1'},
+                          'Source IPs': {'SS': [srcaddr]},
+                          'Workloads Requesting Domain': {'N': '1'},
+                          'Last Updated Timestamp': {'N': str(timestamp)}
+                      }
+
+                      if srcids:
+                          item['Instance-IDs'] = {'SS': [srcids]}
+
+                      dynamodb.put_item(
+                          TableName=TABLE_NAME,
+                          Item=item
+                      )
+
+                  print(f"DynamoDB table updated for domain: {full_domain}")
+
+              except Exception as e:
+                  print(f"Error updating DynamoDB table: {e}")
+
+
+          def update_wildcard_domain_list(domain_counts):
+              print(f"Updating the {WILDCARD_DOMAIN_LIST_ID} list...")
+
+              # Get the existing wildcard domains from the firewall list
+              existing_wildcard_domains = get_allow_list_domains(WILDCARD_DOMAIN_LIST_ID)
+
+              # Get the root domain counts from DynamoDB
+              root_domain_counts = get_root_domain_counts()
+
+              # Check all root domains, not just the ones in the current batch
+              for root_domain, count in root_domain_counts.items():
+                  if count >= WILDCARD_DOMAIN_MINIMUM:
+                      if root_domain not in existing_wildcard_domains:
+                          print(f"Adding {root_domain} to the {WILDCARD_DOMAIN_LIST_ID} list")
+                          add_domain_to_allow_list(root_domain, WILDCARD_DOMAIN_LIST_ID)
+                      else:
+                          print(f"{root_domain} already exists in the {WILDCARD_DOMAIN_LIST_ID} list")
+                  else:
+                      print(f"Total count ({count}) for {root_domain} is less than the minimum ({WILDCARD_DOMAIN_MINIMUM})")
+
+          def get_root_domain_counts():
+              root_domain_counts = defaultdict(set)
+              try:
+                  # Get all hostnames from the DynamoDB table
+                  response = dynamodb.scan(
+                      TableName=TABLE_NAME,
+                      ProjectionExpression="Hostname"
+                  )
+                  
+                  for item in response['Items']:
+                      hostname = item['Hostname']['S']
+                      root_domain = '.'.join(hostname.split('.')[-2:])
+                      root_domain_counts[root_domain].add(hostname)
+
+                  while 'LastEvaluatedKey' in response:
+                      response = dynamodb.scan(
+                          TableName=TABLE_NAME,
+                          ProjectionExpression="Hostname",
+                          ExclusiveStartKey=response['LastEvaluatedKey']
+                      )
+                      for item in response['Items']:
+                          hostname = item['Hostname']['S']
+                          root_domain = '.'.join(hostname.split('.')[-2:])
+                          root_domain_counts[root_domain].add(hostname)
+
+              except Exception as e:
+                  print(f"Error getting root domain counts from DynamoDB: {e}")
+
+              # Convert sets to counts
+              return {domain: len(hostnames) for domain, hostnames in root_domain_counts.items()}
+
+
+
+          def get_allow_list_domains(list_id):
+              domains = []
+              response = route53resolver.list_firewall_domains(
+                  FirewallDomainListId=list_id,
+                  MaxResults=100
+              )
+              domains.extend(response['Domains'])
+              while 'NextToken' in response:
+                  response = route53resolver.list_firewall_domains(
+                      FirewallDomainListId=list_id,
+                      MaxResults=100,
+                      NextToken=response['NextToken']
+                  )
+                  domains.extend(response['Domains'])
+              return domains
+
+      Handler: index.handler
+      LoggingConfig:
+        LogGroup: !Ref DNSAllowListUpdaterFunctionLogGroup
+      MemorySize: 256
+      Environment:
+        Variables:
+          DNS_ALLOW_LIST_ID: !GetAtt R53ResolverDomainAllowList.Id
+          WILDCARD_DNS_ALLOW_LIST_ID: !GetAtt R53ResolverDomainWildcardAllowList.Id
+          DDB_TABLE_NAME: !Ref DNSFlowStatsTable
+          WILDCARD_DOMAIN_MINIMUM: !Ref WildcardDomainMinimum
+      ReservedConcurrentExecutions: 2
+      Role: !GetAtt DNSAllowListUpdaterFunctionRole.Arn
+      Runtime: python3.12
+      Timeout: 20
+
+  # CloudWatch log group to hold DNS Allow List Updater Lambda function execution logs (deletes logs after 1 day)
+  DNSAllowListUpdaterFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 1
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-DNSAllowListUpdaterFunction"
+
+  # Lambda execution role for DNSAllowListUpdaterFunction    
+  DNSAllowListUpdaterFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+
+  # IAM policy for DNSAllowListUpdaterFunction Lambda execution role 
+  DNSAllowListUpdaterFunctionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: LambdaPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "arn:aws:logs:*:*:*"
+          - Effect: Allow
+            Action:
+              - "route53resolver:UpdateFirewallDomains"
+              - "route53resolver:ListFirewallDomains"
+            Resource:
+              - !GetAtt R53ResolverDomainAllowList.Arn
+              - !GetAtt R53ResolverDomainWildcardAllowList.Arn
+          - Effect: Allow
+            Action:
+              - dynamodb:Scan
+              - dynamodb:UpdateItem
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:PutItem
+            Resource:
+              - !GetAtt DNSFlowStatsTable.Arn
+              - !Join
+                - ''
+                - - !GetAtt DNSFlowStatsTable.Arn
+                  - '/*'
+      Roles:
+        - !Ref DNSAllowListUpdaterFunctionRole
