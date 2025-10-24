@@ -1,6 +1,7 @@
 # This templates creates a model Amazon Route 53 Resolver DNS Firewall Advanced ruleset
 
 AWSTemplateFormatVersion: "2010-09-09"
+Description: "Sample DNS Firewall Rule Group (uksb-fopuwajwbw)(tag: dns-firewall-allow-list)"
 
 Resources:
   DNSFirewallAdvancedRuleGroup:

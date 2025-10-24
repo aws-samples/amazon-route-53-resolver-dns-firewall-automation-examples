@@ -1,4 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
+Description: "DNS Firewall Allow List (uksb-fopuwajwbw)(tag: dns-firewall-allow-list)"
+
 Parameters:
   # Name of CloudWatch Logs log group containing Route 53 query logs
   DNSFirewallLogGroupName:

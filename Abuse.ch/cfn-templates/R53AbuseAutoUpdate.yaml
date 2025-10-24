@@ -1,3 +1,6 @@
+Description: "Abuse CH template (uksb-fopuwajwbw)(tag: abuse-updates-template)"
+
+
 Parameters:
   AbuseDLName:
     Description: "The name of the Domain List created to hold the rules"
